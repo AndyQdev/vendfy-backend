@@ -1,0 +1,1 @@
+export { INVENTORY_PERMISSIONS, INVENTORY_PERMISSION_DESCRIPTIONS } from './permissions.constant';

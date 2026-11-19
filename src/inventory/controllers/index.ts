@@ -1,0 +1,9 @@
+export { CategoryController } from './category.controller';
+export { ProductController } from './product.controller';
+export { OrderController } from './order.controller';
+export { InventoryController } from './inventory.controller';
+export { MovementController } from './movement.controller';
+export { ReportsController } from './reports.controller';
+export { PurchaseOrderController } from './purchase-order.controller';
+export { UnitOfMeasureController } from './unit-of-measure.controller';
+export { PresentationController } from './presentation.controller';

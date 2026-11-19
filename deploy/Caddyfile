@@ -1,0 +1,37 @@
+# Caddy saca y renueva los certificados solo. Lo único que necesita es que
+# cada dominio apunte por DNS a la IP de este servidor ANTES de levantarlo:
+# si no resuelve, la autoridad falla la validación y hay que reintentar
+# (docker compose restart caddy).
+{
+	email admin@vendfy.shop
+}
+
+# ---------------------------------------------------------------- API
+# Se sirven dos nombres: el propio y el que da Azure gratis con la IP,
+# que sirve de respaldo si el DNS del dominio falla.
+api.vendfy.shop, vendfy-api.centralus.cloudapp.azure.com {
+	# El panel usa websockets (socket.io) para el inbox en vivo: Caddy los
+	# pasa solo, y el timeout largo evita que corte conexiones ociosas.
+	reverse_proxy api:3001 {
+		flush_interval -1
+		transport http {
+			read_timeout 300s
+			write_timeout 300s
+		}
+	}
+
+	encode gzip zstd
+
+	log {
+		output file /data/logs/api.log {
+			roll_size 20mb
+			roll_keep 5
+		}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		-Server
+	}
+}

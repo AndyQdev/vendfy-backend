@@ -1,0 +1,10 @@
+# Pone en producción el catálogo recibido. Logs: journalctl -u catalogo-publicar
+[Unit]
+Description=Publica el catálogo de productos recibido de GitHub
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/catalogo-publicar
+# Descomprimir 3-4 GB no debe quitarle CPU ni disco a la API.
+Nice=10
+IOSchedulingClass=idle

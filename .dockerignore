@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+.env
+.env.*
+*.log
+test
+docs
+files
+*.md
+!README.md
+# El armador del catálogo no va en la imagen de la API, y su .cache pesa GB.
+catalogo

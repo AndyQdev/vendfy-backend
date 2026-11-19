@@ -1,0 +1,11 @@
+export { CategoryService } from './category.service';
+export { ProductService } from './product.service';
+export { ConsumptionPlanService } from './consumption-plan.service';
+export { OrderService } from './order.service';
+export { OrderEditService } from './order-edit.service';
+export { AiService } from './ai.service';
+export { InventoryService } from './inventory.service';
+export { MovementService } from './movement.service';
+export { ReportsService } from './reports.service';
+export { PurchaseOrderService } from './purchase-order.service';
+export { PresentationService } from './presentation.service';

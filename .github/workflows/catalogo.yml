@@ -1,0 +1,176 @@
+# Catálogo de productos por código de barras: se arma desde cero cada día y se
+# entrega al servidor. El código está en catalogo/ y la parte del servidor en
+# deploy/catalogo/.
+#
+# Si cualquier paso falla, producción sigue con el archivo de ayer, el fallo
+# queda en la bitácora (super-admin → Catálogo → Fuentes y armados, con banner
+# rojo) y GitHub manda el correo de trabajo fallido.
+#
+# Secretos del repo que necesita:
+#   CATALOGO_SSH_KEY     clave privada del usuario `catalogo` de la VM (solo
+#                        puede subir a /data/catalogo/incoming)
+#   CATALOGO_CI_SECRET   el mismo valor que CATALOGO_CI_SECRET en deploy/api.env
+
+name: Catálogo de productos
+
+on:
+  schedule:
+    # 13:37 UTC = 09:37 en Bolivia. Open Food Facts regenera su CSV grande
+    # cerca de las 12:18 UTC: a esta hora ya está el del día.
+    - cron: '37 13 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: catalogo
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  SERVIDOR: vendfy-api.centralus.cloudapp.azure.com
+  # La clave del servidor va fija: si un día cambia, la entrega falla en vez de
+  # mandarle el archivo a quien sea que conteste.
+  SERVIDOR_CLAVE: vendfy-api.centralus.cloudapp.azure.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDLO22XT2UoBemuIEVaKTfp2wG5W5gP30STNHfn6WwK9
+  CATALOGO_API_URL: https://api.vendfy.shop
+  CATALOGO_CI_SECRET: ${{ secrets.CATALOGO_CI_SECRET }}
+  # El runner tiene 16 GB; DuckDB ordena millones de filas y lo que no entre
+  # va a disco.
+  CATALOGO_MEMORIA: 6GB
+
+jobs:
+  armar:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: catalogo
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Hora de inicio
+        run: echo "CATALOGO_INICIO=$(date -u +%FT%TZ)" >> "$GITHUB_ENV"
+
+      # El runner trae ~20 GB libres y el armado usa: el CSV de OFF (1,3 GB),
+      # temporales de DuckDB, el SQLite (3,5 GB), su copia temporal y el .zst.
+      - name: Liberar disco
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: catalogo/package-lock.json
+
+      # Descargas de ayer (se vuelven a bajar solo si cambiaron) y la huella
+      # del armado anterior, para contar nuevos / actualizados / eliminados.
+      # La clave cambia en cada corrida porque las caches de GitHub no se
+      # sobrescriben; restore-keys trae la más reciente.
+      - name: Recuperar cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            catalogo/.cache
+            !catalogo/.cache/duckdb-tmp
+          key: catalogo-${{ github.run_id }}
+          restore-keys: catalogo-
+
+      - name: Instalar
+        run: npm ci
+
+      - name: Armar
+        id: armar
+        run: npm run construir
+
+      - name: Validar
+        id: validar
+        run: npm run validar
+
+      - name: Guardar cache
+        if: steps.validar.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            catalogo/.cache
+            !catalogo/.cache/duckdb-tmp
+          key: catalogo-${{ github.run_id }}
+
+      # Sin --long: descomprimir con una ventana grande pide más RAM de la que
+      # la VM (1 GB) tiene libre.
+      - name: Comprimir
+        id: comprimir
+        run: |
+          rm -rf .cache/duckdb-tmp
+          zstd -T0 -9 -q out/catalogo.db -o out/catalogo.db.zst
+          ( cd out && sha256sum catalogo.db.zst > catalogo.db.zst.sha256 )
+          ls -la out
+
+      # Primero el .zst y DESPUÉS el .sha256: la llegada del .sha256 es lo que
+      # dispara la publicación en el servidor.
+      - name: Entregar al servidor
+        id: entregar
+        env:
+          CLAVE: ${{ secrets.CATALOGO_SSH_KEY }}
+        run: |
+          if [ -z "$CLAVE" ] || [ -z "$CATALOGO_CI_SECRET" ]; then
+            echo "faltan los secretos CATALOGO_SSH_KEY o CATALOGO_CI_SECRET" | tee out/error-entrega.txt; exit 1
+          fi
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$CLAVE" > ~/.ssh/catalogo && chmod 600 ~/.ssh/catalogo
+          printf '%s\n' "$SERVIDOR_CLAVE" > ~/.ssh/known_hosts
+          SSH="ssh -i $HOME/.ssh/catalogo -o BatchMode=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=30"
+          echo "ENTREGA_INICIO=$(date -u +%FT%TZ)" >> "$GITHUB_ENV"
+          for intento in 1 2 3; do
+            if rsync -e "$SSH" --partial --timeout=300 out/catalogo.db.zst "catalogo@$SERVIDOR:" \
+              && rsync -e "$SSH" --timeout=60 out/catalogo.db.zst.sha256 "catalogo@$SERVIDOR:"; then
+              exit 0
+            fi
+            echo "intento $intento falló"; sleep $((intento * 30))
+          done
+          echo "no se pudo subir el archivo al servidor por SSH (3 intentos)" > out/error-entrega.txt
+          exit 1
+
+      # La entrega termina cuando la API está SIRVIENDO este armado, no cuando
+      # el archivo llegó al disco. Si el servidor rechazó el archivo (checksum,
+      # espacio), estado.json lo dice y se corta sin esperar.
+      - name: Esperar a que la API lo sirva
+        id: esperar
+        run: |
+          esperado=$(jq -r .construidoEn out/resumen.json)
+          for i in $(seq 1 45); do
+            r=$(curl -fsS --max-time 30 -H "X-Catalogo-Secret: $CATALOGO_CI_SECRET" \
+              "$CATALOGO_API_URL/api/catalogo/ci/servido" || true)
+            servido=$(jq -r '.data.construidoEn // empty' <<<"$r" 2>/dev/null || true)
+            if [ "$servido" = "$esperado" ]; then
+              echo "la API ya sirve el armado $esperado"; exit 0
+            fi
+            pub_estado=$(jq -r '.data.publicacion.estado // empty' <<<"$r" 2>/dev/null || true)
+            pub_en=$(jq -r '.data.publicacion.en // empty' <<<"$r" 2>/dev/null || true)
+            if [ "$pub_estado" = "error" ] && [[ "$pub_en" > "$ENTREGA_INICIO" ]]; then
+              echo "el servidor rechazó el archivo: $(jq -r .data.publicacion.error <<<"$r")" | tee out/error-entrega.txt
+              exit 1
+            fi
+            echo "esperando… sirve: ${servido:-nada}"; sleep 20
+          done
+          echo "pasaron 15 min y la API sigue sirviendo ${servido:-nada} (ver journalctl -u catalogo-publicar en la VM)" | tee out/error-entrega.txt
+          exit 1
+
+      # Siempre, también si algo de arriba falló: una falla que no se registra
+      # es una falla que nadie ve.
+      - name: Registrar en la bitácora
+        if: always()
+        run: |
+          if [ "${{ steps.armar.outcome }}" = "failure" ]; then
+            npm run registrar                      # usa out/resumen-error.json
+          elif [ "${{ steps.armar.outcome }}" != "success" ]; then
+            npm run registrar -- --error "el trabajo falló antes de armar (ver el log en GitHub)"
+          elif [ "${{ steps.validar.outcome }}" != "success" ]; then
+            npm run registrar -- --error "el archivo armado no pasó la validación (ver el log en GitHub)"
+          elif [ "${{ steps.esperar.outcome }}" != "success" ]; then
+            npm run registrar -- --error "$(cat out/error-entrega.txt 2>/dev/null || echo 'no se pudo entregar al servidor')"
+          else
+            npm run registrar
+          fi

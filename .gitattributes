@@ -1,0 +1,9 @@
+# Los scripts y la config del servidor SIEMPRE con saltos de línea LF.
+# Si se guardan con CRLF (lo normal en Windows), bash en Linux falla con
+# errores del estilo $'\r': command not found.
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+Caddyfile       text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+deploy/*.example text eol=lf

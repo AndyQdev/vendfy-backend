@@ -1,0 +1,4 @@
+node_modules/
+# Descargas de las fuentes (cientos de MB) y el archivo armado (GB).
+.cache/
+out/

@@ -1,0 +1,10 @@
+# Vigila la llegada de un catálogo nuevo (ver publicar.sh).
+[Unit]
+Description=Espera un catálogo nuevo en /data/catalogo/incoming
+
+[Path]
+PathExists=/data/catalogo/incoming/catalogo.db.zst.sha256
+Unit=catalogo-publicar.service
+
+[Install]
+WantedBy=multi-user.target

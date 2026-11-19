@@ -1,0 +1,15 @@
+# Manifiesto para desplegar en Heroku como contenedor.
+#
+# Reusa el MISMO Dockerfile del VPS: Heroku construye la imagen y la corre.
+# No hace falta `run`: al omitirlo se usa el CMD del Dockerfile
+# (node dist/main).
+#
+# Heroku asigna el puerto por la variable PORT en cada arranque, y la app ya
+# la lee (ConfigService → process.env.PORT), así que no hay nada que tocar.
+#
+# Activación (una sola vez):
+#   heroku stack:set container -a <app>
+#   git push heroku main
+build:
+  docker:
+    web: Dockerfile

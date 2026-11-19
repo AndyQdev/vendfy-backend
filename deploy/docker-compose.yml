@@ -1,0 +1,62 @@
+# Backend de Vendfy en el servidor.
+#
+#   Caddy (443) ── api.vendfy.shop → ventas-service (NestJS)
+#
+# El panel y la tienda NO están aquí: van a Vercel, que compila en su
+# infraestructura. Esta máquina tiene 1 GB y construir Next.js aquí sería
+# lento y frágil. Los Dockerfiles de los frontends siguen en sus repos por
+# si algún día conviene traerlos.
+#
+# La base tampoco: vive en Supabase (us-east-2).
+#
+# Uso: docker compose -f deploy/docker-compose.yml up -d --build
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: vendfy/api:latest
+    restart: unless-stopped
+    env_file:
+      - ./api.env
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      CATALOGO_DB_PATH: /data/catalogo/catalogo.db
+    # Catálogo de productos por código de barras: lo entrega cada día GitHub
+    # Actions (ver deploy/catalogo/). Se monta la CARPETA y no el archivo: el
+    # reemplazo es un mv, que cambia el inodo, y un archivo montado suelto
+    # seguiría mostrando el viejo.
+    volumes:
+      - /data/catalogo:/data/catalogo:ro
+    expose:
+      - '3001'
+    networks: [vendfy]
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data      # certificados: NO borrar, Let's Encrypt limita por semana
+      - caddy_config:/config
+    depends_on: [api]
+    networks: [vendfy]
+    logging: *logging
+
+networks:
+  vendfy:
+
+volumes:
+  caddy_data:
+  caddy_config:
